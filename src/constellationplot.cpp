@@ -11,7 +11,6 @@
  */
 
 #include "constellationplot.h"
-#include <QPainterPath>
 #include <cmath>
 
 ConstellationPlot::ConstellationPlot(std::shared_ptr<AbstractSampleSource> source)
@@ -37,7 +36,7 @@ void ConstellationPlot::paintMid(QPainter &painter, QRect &rect, range_t<size_t>
     if (!src) return;
 
     // Determine how many samples to grab (cap for performance)
-    size_t count = std::min((size_t)sampleRange.length(), maxSamples);
+    size_t count = std::min(static_cast<size_t>(sampleRange.length()), maxSamples);
     size_t start = sampleRange.minimum;
 
     // If we have more samples than maxSamples, take evenly spaced ones

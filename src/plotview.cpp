@@ -68,6 +68,45 @@ void PlotView::addPlot(Plot *plot)
 void PlotView::mouseMoveEvent(QMouseEvent *event)
 {
     updateAnnotationTooltip(event);
+
+    // ── Mouse hover readout ────────────────────────────────────────
+    if (spectrogramPlot != nullptr && sampleRate > 0 && mainSampleSource != nullptr) {
+        int plotY = -verticalScrollBar()->value();
+        int spectroHeight = spectrogramPlot->height();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        int mouseX = event->position().x();
+        int mouseY = event->position().y() - plotY;
+#else
+        int mouseX = event->pos().x();
+        int mouseY = event->pos().y() - plotY;
+#endif
+
+        // Only show readout when hovering over the spectrogram area
+        if (mouseY >= 0 && mouseY < spectroHeight && mouseX >= 0) {
+            // Frequency: 0 Hz is at the center, +sampleRate/2 at top, -sampleRate/2 at bottom
+            double freq = (0.5 - (double)mouseY / spectroHeight) * sampleRate;
+
+            // Time: convert pixel column to sample, then to time
+            size_t sample = columnToSample(horizontalScrollBar()->value() + mouseX);
+            double time = (double)sample / sampleRate;
+
+            // Format frequency nicely
+            QString freqStr;
+            double absFreq = std::abs(freq);
+            if (absFreq >= 1e9)
+                freqStr = QString("%1 GHz").arg(freq / 1e9, 0, 'f', 3);
+            else if (absFreq >= 1e6)
+                freqStr = QString("%1 MHz").arg(freq / 1e6, 0, 'f', 3);
+            else if (absFreq >= 1e3)
+                freqStr = QString("%1 kHz").arg(freq / 1e3, 0, 'f', 3);
+            else
+                freqStr = QString("%1 Hz").arg(freq, 0, 'f', 1);
+
+            QString info = QString("  Freq: %1  |  Time: %2 s").arg(freqStr).arg(time, 0, 'f', 6);
+            emit mousePositionChanged(info);
+        }
+    }
+
     QGraphicsView::mouseMoveEvent(event);
 }
 
@@ -756,5 +795,73 @@ void PlotView::computeSNR()
     // Clamp SNR to reasonable range
     snrDB = std::max(-10.0f, std::min(99.9f, snrDB));
 
-    emit snrUpdated(signalPowerDB, noisePowerDB, snrDB);
+    // ── PAPR (Peak-to-Average Power Ratio) ─────────────────────────
+    float paprDB = (meanPower > 1e-20) ? 10.0f * log10f(maxSamplePower / meanPower) : 0.0f;
+    paprDB = std::max(0.0f, std::min(99.9f, paprDB));
+
+    // ── Bandwidth (-3dB) ───────────────────────────────────────────
+    float bandwidthHz = 0.0f;
+    if (sampleRate > 0 && actualCount >= 64) {
+        // Use a power-of-2 FFT size for efficiency
+        int bwFFTSize = 1;
+        while (bwFFTSize * 2 <= (int)actualCount && bwFFTSize < 4096)
+            bwFFTSize *= 2;
+
+        FFT bwFFT(bwFFTSize);
+        auto fftBuf = std::unique_ptr<std::complex<float>[]>(new std::complex<float>[bwFFTSize]);
+
+        // Copy samples into FFT buffer
+        for (int i = 0; i < bwFFTSize; i++)
+            fftBuf[i] = samples[i];
+
+        bwFFT.process(fftBuf.get(), fftBuf.get());
+
+        // Compute power spectrum and find peak
+        std::vector<float> psd(bwFFTSize);
+        float peakPSD = -999.0f;
+        int peakBin = 0;
+        for (int i = 0; i < bwFFTSize; i++) {
+            psd[i] = 10.0f * log10f(std::norm(fftBuf[i]) / (float)(bwFFTSize * bwFFTSize) + 1e-30f);
+            if (psd[i] > peakPSD) {
+                peakPSD = psd[i];
+                peakBin = i;
+            }
+        }
+
+        // Find -3dB points (search outward from peak)
+        float threshold = peakPSD - 3.0f;
+        int lowerBin = peakBin;
+        int upperBin = peakBin;
+
+        // Search downward
+        for (int i = peakBin; i >= 0; i--) {
+            if (psd[i] < threshold) break;
+            lowerBin = i;
+        }
+        // Wrap around for negative frequencies
+        if (lowerBin == 0) {
+            for (int i = bwFFTSize - 1; i > peakBin; i--) {
+                if (psd[i] < threshold) break;
+                lowerBin = i - bwFFTSize;
+            }
+        }
+
+        // Search upward
+        for (int i = peakBin; i < bwFFTSize; i++) {
+            if (psd[i] < threshold) break;
+            upperBin = i;
+        }
+        // Wrap around
+        if (upperBin == bwFFTSize - 1) {
+            for (int i = 0; i < peakBin; i++) {
+                if (psd[i] < threshold) break;
+                upperBin = i + bwFFTSize;
+            }
+        }
+
+        int bwBins = upperBin - lowerBin + 1;
+        bandwidthHz = (float)bwBins / (float)bwFFTSize * sampleRate;
+    }
+
+    emit snrUpdated(signalPowerDB, noisePowerDB, snrDB, paprDB, bandwidthHz);
 }

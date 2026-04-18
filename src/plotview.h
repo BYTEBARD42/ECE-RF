@@ -23,6 +23,7 @@
 #include <QPaintEvent>
 
 #include "cursors.h"
+#include "fft.h"
 #include "inputsource.h"
 #include "plot.h"
 #include "samplesource.h"
@@ -39,7 +40,8 @@ public:
 
 signals:
     void timeSelectionChanged(float time);
-    void snrUpdated(float signalPower, float noisePower, float snr);
+    void snrUpdated(float signalPower, float noisePower, float snr, float papr, float bandwidth);
+    void mousePositionChanged(QString info);
     void zoomIn();
     void zoomOut();
 
