@@ -23,8 +23,6 @@
 #include <QFileDialog>
 #include <QSettings>
 #include <QLabel>
-#include <QGroupBox>
-#include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <cmath>
 #include "util.h"
@@ -32,95 +30,96 @@
 SpectrogramControls::SpectrogramControls(const QString & title, QWidget * parent)
     : QDockWidget::QDockWidget(title, parent)
 {
-    widget = new QWidget(this);
+    // Scrollable container so controls never get clipped
+    QScrollArea *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scrollArea->setFrameShape(QFrame::NoFrame);
 
-    // Main vertical layout for the dock
-    QVBoxLayout *mainLayout = new QVBoxLayout(widget);
+    widget = new QWidget(scrollArea);
+    mainLayout = new QVBoxLayout(widget);
     mainLayout->setSpacing(8);
     mainLayout->setContentsMargins(8, 8, 8, 8);
 
-    // ── Open File Button ─────────────────────────────────────────────────────
-    fileOpenButton = new QPushButton(QString::fromUtf8("\xF0\x9F\x93\x82  Open file..."), widget);
-    fileOpenButton->setMinimumHeight(36);
-    mainLayout->addWidget(fileOpenButton);
+    // ── Helper to create a slider row with a value label ────────────
+    auto makeSliderRow = [](QFormLayout *form, const QString &label,
+                            QSlider *slider, QLabel *&valueLabel) {
+        QWidget *row = new QWidget();
+        QHBoxLayout *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(8);
+        rowLayout->addWidget(slider, 1);
+        valueLabel = new QLabel("0");
+        valueLabel->setObjectName("valueLabel");
+        valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        valueLabel->setMinimumWidth(48);
+        rowLayout->addWidget(valueLabel);
+        form->addRow(new QLabel(label), row);
+    };
 
-    // ── Sample Rate ──────────────────────────────────────────────────────────
-    layout = new QFormLayout();
-    layout->setSpacing(6);
+    // ═══════════════════════════════════════════════════════════════
+    // FILE group
+    // ═══════════════════════════════════════════════════════════════
+    QGroupBox *fileGroup = new QGroupBox(tr("File"), widget);
+    QFormLayout *fileLayout = new QFormLayout(fileGroup);
+    fileLayout->setSpacing(6);
+    fileLayout->setContentsMargins(10, 18, 10, 10);
+
+    fileOpenButton = new QPushButton(tr("📂  Open file..."), widget);
+    fileOpenButton->setCursor(Qt::PointingHandCursor);
+    fileLayout->addRow(fileOpenButton);
+
     sampleRate = new QLineEdit();
     auto double_validator = new QDoubleValidator(this);
     double_validator->setBottom(0.0);
     sampleRate->setValidator(double_validator);
-    layout->addRow(new QLabel(tr("Sample rate:")), sampleRate);
-    mainLayout->addLayout(layout);
+    sampleRate->setPlaceholderText(tr("e.g. 8000000"));
+    fileLayout->addRow(new QLabel(tr("Sample rate:")), sampleRate);
 
-    // ── Spectrogram Group ────────────────────────────────────────────────────
-    QGroupBox *spectrogramGroup = new QGroupBox(tr("Spectrogram"), widget);
-    QFormLayout *specLayout = new QFormLayout(spectrogramGroup);
-    specLayout->setSpacing(6);
-    specLayout->setContentsMargins(10, 16, 10, 10);
+    mainLayout->addWidget(fileGroup);
 
-    // FFT size slider + value label
-    QHBoxLayout *fftRow = new QHBoxLayout();
+    // ═══════════════════════════════════════════════════════════════
+    // SPECTROGRAM group
+    // ═══════════════════════════════════════════════════════════════
+    QGroupBox *spectroGroup = new QGroupBox(tr("Spectrogram"), widget);
+    QFormLayout *spectroLayout = new QFormLayout(spectroGroup);
+    spectroLayout->setSpacing(6);
+    spectroLayout->setContentsMargins(10, 18, 10, 10);
+
     fftSizeSlider = new QSlider(Qt::Horizontal, widget);
     fftSizeSlider->setRange(4, 13);
     fftSizeSlider->setPageStep(1);
-    fftSizeLabel = new QLabel(tr("512"), widget);
-    fftSizeLabel->setMinimumWidth(48);
-    fftSizeLabel->setStyleSheet("color: #00d4aa; font-weight: bold;");
-    fftRow->addWidget(fftSizeSlider);
-    fftRow->addWidget(fftSizeLabel);
-    specLayout->addRow(new QLabel(tr("FFT size:")), fftRow);
+    makeSliderRow(spectroLayout, tr("FFT size:"), fftSizeSlider, fftSizeValueLabel);
 
-    // Zoom slider + value label
-    QHBoxLayout *zoomRow = new QHBoxLayout();
     zoomLevelSlider = new QSlider(Qt::Horizontal, widget);
     zoomLevelSlider->setRange(0, 10);
     zoomLevelSlider->setPageStep(1);
-    zoomLevelLabel = new QLabel(tr("1×"), widget);
-    zoomLevelLabel->setMinimumWidth(48);
-    zoomLevelLabel->setStyleSheet("color: #00d4aa; font-weight: bold;");
-    zoomRow->addWidget(zoomLevelSlider);
-    zoomRow->addWidget(zoomLevelLabel);
-    specLayout->addRow(new QLabel(tr("Zoom:")), zoomRow);
+    makeSliderRow(spectroLayout, tr("Zoom:"), zoomLevelSlider, zoomValueLabel);
 
-    // Power max slider + value label
-    QHBoxLayout *pmaxRow = new QHBoxLayout();
     powerMaxSlider = new QSlider(Qt::Horizontal, widget);
     powerMaxSlider->setRange(-140, 10);
-    powerMaxLabel = new QLabel(tr("0 dB"), widget);
-    powerMaxLabel->setMinimumWidth(56);
-    powerMaxLabel->setStyleSheet("color: #00d4aa; font-weight: bold;");
-    pmaxRow->addWidget(powerMaxSlider);
-    pmaxRow->addWidget(powerMaxLabel);
-    specLayout->addRow(new QLabel(tr("Power max:")), pmaxRow);
+    makeSliderRow(spectroLayout, tr("Power max:"), powerMaxSlider, powerMaxValueLabel);
 
-    // Power min slider + value label
-    QHBoxLayout *pminRow = new QHBoxLayout();
     powerMinSlider = new QSlider(Qt::Horizontal, widget);
     powerMinSlider->setRange(-140, 10);
-    powerMinLabel = new QLabel(tr("-100 dB"), widget);
-    powerMinLabel->setMinimumWidth(56);
-    powerMinLabel->setStyleSheet("color: #00d4aa; font-weight: bold;");
-    pminRow->addWidget(powerMinSlider);
-    pminRow->addWidget(powerMinLabel);
-    specLayout->addRow(new QLabel(tr("Power min:")), pminRow);
+    makeSliderRow(spectroLayout, tr("Power min:"), powerMinSlider, powerMinValueLabel);
 
-    // Scales checkbox
-    scalesCheckBox = new QCheckBox(widget);
+    scalesCheckBox = new QCheckBox(tr("Show scales"), widget);
     scalesCheckBox->setCheckState(Qt::Checked);
-    specLayout->addRow(new QLabel(tr("Scales:")), scalesCheckBox);
+    spectroLayout->addRow(scalesCheckBox);
 
-    mainLayout->addWidget(spectrogramGroup);
+    mainLayout->addWidget(spectroGroup);
 
-    // ── Time Selection Group ─────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════
+    // TIME SELECTION group
+    // ═══════════════════════════════════════════════════════════════
     QGroupBox *timeGroup = new QGroupBox(tr("Time Selection"), widget);
     QFormLayout *timeLayout = new QFormLayout(timeGroup);
     timeLayout->setSpacing(6);
-    timeLayout->setContentsMargins(10, 16, 10, 10);
+    timeLayout->setContentsMargins(10, 18, 10, 10);
 
-    cursorsCheckBox = new QCheckBox(widget);
-    timeLayout->addRow(new QLabel(tr("Enable cursors:")), cursorsCheckBox);
+    cursorsCheckBox = new QCheckBox(tr("Enable cursors"), widget);
+    timeLayout->addRow(cursorsCheckBox);
 
     cursorSymbolsSpinBox = new QSpinBox();
     cursorSymbolsSpinBox->setMinimum(1);
@@ -128,40 +127,47 @@ SpectrogramControls::SpectrogramControls(const QString & title, QWidget * parent
     timeLayout->addRow(new QLabel(tr("Symbols:")), cursorSymbolsSpinBox);
 
     rateLabel = new QLabel();
+    rateLabel->setObjectName("valueLabel");
     timeLayout->addRow(new QLabel(tr("Rate:")), rateLabel);
 
     periodLabel = new QLabel();
+    periodLabel->setObjectName("valueLabel");
     timeLayout->addRow(new QLabel(tr("Period:")), periodLabel);
 
     symbolRateLabel = new QLabel();
+    symbolRateLabel->setObjectName("valueLabel");
     timeLayout->addRow(new QLabel(tr("Symbol rate:")), symbolRateLabel);
 
     symbolPeriodLabel = new QLabel();
+    symbolPeriodLabel->setObjectName("valueLabel");
     timeLayout->addRow(new QLabel(tr("Symbol period:")), symbolPeriodLabel);
 
     mainLayout->addWidget(timeGroup);
 
-    // ── SigMF Control Group ──────────────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════
+    // SIGMF CONTROL group
+    // ═══════════════════════════════════════════════════════════════
     QGroupBox *sigmfGroup = new QGroupBox(tr("SigMF Control"), widget);
     QFormLayout *sigmfLayout = new QFormLayout(sigmfGroup);
     sigmfLayout->setSpacing(6);
-    sigmfLayout->setContentsMargins(10, 16, 10, 10);
+    sigmfLayout->setContentsMargins(10, 18, 10, 10);
 
-    annosCheckBox = new QCheckBox(widget);
-    sigmfLayout->addRow(new QLabel(tr("Annotations:")), annosCheckBox);
+    annosCheckBox = new QCheckBox(tr("Display annotations"), widget);
+    sigmfLayout->addRow(annosCheckBox);
 
-    commentsCheckBox = new QCheckBox(widget);
-    sigmfLayout->addRow(new QLabel(tr("Comment tooltips:")), commentsCheckBox);
+    commentsCheckBox = new QCheckBox(tr("Annotation comment tooltips"), widget);
+    sigmfLayout->addRow(commentsCheckBox);
 
     mainLayout->addWidget(sigmfGroup);
 
-    // Push everything up
+    // Push remaining space to the bottom
     mainLayout->addStretch(1);
 
     widget->setLayout(mainLayout);
-    setWidget(widget);
+    scrollArea->setWidget(widget);
+    setWidget(scrollArea);
 
-    // ── Connections ───────────────────────────────────────────────────────────
+    // ── Connections ─────────────────────────────────────────────────
     connect(fftSizeSlider, &QSlider::valueChanged, this, &SpectrogramControls::fftSizeChanged);
     connect(zoomLevelSlider, &QSlider::valueChanged, this, &SpectrogramControls::zoomLevelChanged);
     connect(fileOpenButton, &QPushButton::clicked, this, &SpectrogramControls::fileOpenButtonClicked);
@@ -169,19 +175,11 @@ SpectrogramControls::SpectrogramControls(const QString & title, QWidget * parent
     connect(powerMinSlider, &QSlider::valueChanged, this, &SpectrogramControls::powerMinChanged);
     connect(powerMaxSlider, &QSlider::valueChanged, this, &SpectrogramControls::powerMaxChanged);
 
-    // Update value labels when sliders change
-    connect(fftSizeSlider, &QSlider::valueChanged, this, [this](int value) {
-        fftSizeLabel->setText(QString::number((int)pow(2, value)));
-    });
-    connect(zoomLevelSlider, &QSlider::valueChanged, this, [this](int value) {
-        zoomLevelLabel->setText(QString("%1×").arg((int)pow(2, value)));
-    });
-    connect(powerMaxSlider, &QSlider::valueChanged, this, [this](int value) {
-        powerMaxLabel->setText(QString("%1 dB").arg(value));
-    });
-    connect(powerMinSlider, &QSlider::valueChanged, this, [this](int value) {
-        powerMinLabel->setText(QString("%1 dB").arg(value));
-    });
+    // Value label update connections
+    connect(fftSizeSlider, &QSlider::valueChanged, this, &SpectrogramControls::updateFFTSizeLabel);
+    connect(zoomLevelSlider, &QSlider::valueChanged, this, &SpectrogramControls::updateZoomLabel);
+    connect(powerMaxSlider, &QSlider::valueChanged, this, &SpectrogramControls::updatePowerMaxLabel);
+    connect(powerMinSlider, &QSlider::valueChanged, this, &SpectrogramControls::updatePowerMinLabel);
 }
 
 void SpectrogramControls::clearCursorLabels()
@@ -313,4 +311,26 @@ void SpectrogramControls::zoomOut()
 void SpectrogramControls::enableAnnotations(bool enabled) {
     // disable annotation comments checkbox when annotations are disabled
     commentsCheckBox->setEnabled(enabled);
+}
+
+void SpectrogramControls::updateFFTSizeLabel(int value)
+{
+    int fftSize = pow(2, value);
+    fftSizeValueLabel->setText(QString::number(fftSize));
+}
+
+void SpectrogramControls::updateZoomLabel(int value)
+{
+    int zoom = pow(2, value);
+    zoomValueLabel->setText(QString::number(zoom) + "x");
+}
+
+void SpectrogramControls::updatePowerMaxLabel(int value)
+{
+    powerMaxValueLabel->setText(QString::number(value) + " dB");
+}
+
+void SpectrogramControls::updatePowerMinLabel(int value)
+{
+    powerMinValueLabel->setText(QString::number(value) + " dB");
 }

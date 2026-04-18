@@ -29,73 +29,47 @@
 MainWindow::MainWindow()
 {
     setWindowTitle(tr("spectr"));
-    setMinimumSize(800, 600);
+    setMinimumSize(1024, 700);
 
     QPixmapCache::setCacheLimit(40960);
 
-    // ── Toolbar ──────────────────────────────────────────────────────────────
+    // ── Toolbar ────────────────────────────────────────────────────
     toolBar = addToolBar(tr("Main"));
     toolBar->setMovable(false);
-    toolBar->setIconSize(QSize(18, 18));
+    toolBar->setFloatable(false);
+    toolBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
 
-    openAction = toolBar->addAction(QString::fromUtf8("\xF0\x9F\x93\x82 Open"), this, [this]() {
-        dock->fileOpenButtonClicked();
-    });
-    openAction->setShortcut(QKeySequence::Open);
-    openAction->setToolTip(tr("Open file (Ctrl+O)"));
+    QAction *openAction = toolBar->addAction(tr("📂  Open File"));
+    QAction *toggleDockAction = toolBar->addAction(tr("⚙  Controls"));
+    toggleDockAction->setCheckable(true);
+    toggleDockAction->setChecked(true);
 
-    toolBar->addSeparator();
-
-    zoomInAction = toolBar->addAction(QString::fromUtf8("\xE2\x9E\x95 Zoom In"), this, [this]() {
-        dock->zoomIn();
-    });
-    zoomInAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Plus));
-    zoomInAction->setToolTip(tr("Zoom in (Ctrl++)"));
-
-    zoomOutAction = toolBar->addAction(QString::fromUtf8("\xE2\x9E\x96 Zoom Out"), this, [this]() {
-        dock->zoomOut();
-    });
-    zoomOutAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Minus));
-    zoomOutAction->setToolTip(tr("Zoom out (Ctrl+-)"));
-
-    toolBar->addSeparator();
-
-    toggleCursorsAction = toolBar->addAction(QString::fromUtf8("\xE2\x9C\x82 Cursors"));
-    toggleCursorsAction->setCheckable(true);
-    toggleCursorsAction->setShortcut(QKeySequence(Qt::Key_C));
-    toggleCursorsAction->setToolTip(tr("Toggle cursors (C)"));
-
-    toggleScalesAction = toolBar->addAction(QString::fromUtf8("\xF0\x9F\x93\x8F Scales"));
-    toggleScalesAction->setCheckable(true);
-    toggleScalesAction->setChecked(true);
-    toggleScalesAction->setShortcut(QKeySequence(Qt::Key_S));
-    toggleScalesAction->setToolTip(tr("Toggle scales (S)"));
-
-    // ── Status Bar ───────────────────────────────────────────────────────────
-    statusFileLabel = new QLabel(tr("  No file loaded  "));
-    statusFileLabel->setStyleSheet("color: #9090a8; padding: 0 12px;");
-    statusRateLabel = new QLabel(tr("  Rate: —  "));
-    statusRateLabel->setStyleSheet("color: #9090a8; padding: 0 12px;");
-    statusZoomLabel = new QLabel(tr("  Zoom: 1×  "));
-    statusZoomLabel->setStyleSheet("color: #9090a8; padding: 0 12px;");
-
-    statusBar()->addWidget(statusFileLabel);
-    statusBar()->addWidget(statusRateLabel);
-    statusBar()->addPermanentWidget(statusZoomLabel);
-
-    // ── Dock (Controls Panel) ────────────────────────────────────────────────
+    // ── Dock (Controls Panel) ──────────────────────────────────────
     dock = new SpectrogramControls(tr("Controls"), this);
     dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
 
+    // Toggle dock visibility from toolbar
+    connect(toggleDockAction, &QAction::toggled, dock, &QDockWidget::setVisible);
+    connect(dock, &QDockWidget::visibilityChanged, toggleDockAction, &QAction::setChecked);
+
+    // ── Input & Plots ──────────────────────────────────────────────
     input = new InputSource();
     input->subscribe(this);
 
     plots = new PlotView(input);
     setCentralWidget(plots);
 
-    // Connect dock inputs
+    // ── Status Bar ─────────────────────────────────────────────────
+    statusLabel = new QLabel(tr("  Ready"));
+    statusBar()->addWidget(statusLabel, 1);
+
+    // ── Connect dock inputs ────────────────────────────────────────
     connect(dock, &SpectrogramControls::openFile, this, &MainWindow::openFile);
+    connect(openAction, &QAction::triggered, dock, [this]() {
+        // Trigger the dock's file open logic
+        dock->fileOpenButton->click();
+    });
     connect(dock->sampleRate, static_cast<void (QLineEdit::*)(const QString&)>(&QLineEdit::textChanged), this, static_cast<void (MainWindow::*)(QString)>(&MainWindow::setSampleRate));
     connect(dock, static_cast<void (SpectrogramControls::*)(int, int)>(&SpectrogramControls::fftOrZoomChanged), plots, &PlotView::setFFTAndZoom);
     connect(dock->powerMaxSlider, &QSlider::valueChanged, plots, &PlotView::setPowerMax);
@@ -107,21 +81,10 @@ MainWindow::MainWindow()
     connect(dock->commentsCheckBox, &QCheckBox::stateChanged, plots, &PlotView::enableAnnotationCommentsTooltips);
     connect(dock->cursorSymbolsSpinBox, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), plots, &PlotView::setCursorSegments);
 
-    // Connect toolbar actions to dock checkboxes (bidirectional sync)
-    connect(toggleCursorsAction, &QAction::toggled, dock->cursorsCheckBox, &QCheckBox::setChecked);
-    connect(dock->cursorsCheckBox, &QCheckBox::toggled, toggleCursorsAction, &QAction::setChecked);
-    connect(toggleScalesAction, &QAction::toggled, dock->scalesCheckBox, &QCheckBox::setChecked);
-    connect(dock->scalesCheckBox, &QCheckBox::toggled, toggleScalesAction, &QAction::setChecked);
-
     // Connect dock outputs
     connect(plots, &PlotView::timeSelectionChanged, dock, &SpectrogramControls::timeSelectionChanged);
     connect(plots, &PlotView::zoomIn, dock, &SpectrogramControls::zoomIn);
     connect(plots, &PlotView::zoomOut, dock, &SpectrogramControls::zoomOut);
-
-    // Update status bar on zoom changes
-    connect(dock, static_cast<void (SpectrogramControls::*)(int, int)>(&SpectrogramControls::fftOrZoomChanged), this, [this](int fftSize, int zoomLevel) {
-        statusZoomLabel->setText(QString("  Zoom: %1×  ").arg(zoomLevel));
-    });
 
     // Set defaults after making connections so everything is in sync
     dock->setDefaults();
@@ -134,7 +97,7 @@ void MainWindow::openFile(QString fileName)
     this->setWindowTitle(title.arg(QApplication::applicationName(),fileName.section('/',-1,-1)));
 
     // Update status bar
-    statusFileLabel->setText(QString("  %1  ").arg(fileName.section('/',-1,-1)));
+    statusLabel->setText(tr("  📄 %1").arg(fileName.section('/',-1,-1)));
 
     // Try to parse osmocom_fft filenames and extract the sample rate and center frequency.
     // Example file name: "name-f2.411200e+09-s5.000000e+06-t20160807180210.cfile"
@@ -170,9 +133,6 @@ void MainWindow::openFile(QString fileName)
 void MainWindow::invalidateEvent()
 {
     plots->setSampleRate(input->rate());
-
-    // Update status bar rate
-    statusRateLabel->setText(QString("  Rate: %1 Hz  ").arg(QString::number(input->rate(), 'f', 0)));
 
     // Only update the text box if it is not already representing
     // the current value. Otherwise the cursor might jump or the

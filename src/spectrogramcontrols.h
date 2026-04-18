@@ -21,12 +21,15 @@
 
 #include <QDockWidget>
 #include <QFormLayout>
+#include <QVBoxLayout>
+#include <QGroupBox>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSlider>
 #include <QSpinBox>
 #include <QCheckBox>
 #include <QLabel>
+#include <QScrollArea>
 
 class SpectrogramControls : public QDockWidget
 {
@@ -45,20 +48,30 @@ public slots:
     void zoomIn();
     void zoomOut();
     void enableAnnotations(bool enabled);
-    void fileOpenButtonClicked();
 
 private slots:
     void fftSizeChanged(int value);
     void zoomLevelChanged(int value);
     void powerMinChanged(int value);
     void powerMaxChanged(int value);
+    void fileOpenButtonClicked();
     void cursorsStateChanged(int state);
+    void updateFFTSizeLabel(int value);
+    void updateZoomLabel(int value);
+    void updatePowerMaxLabel(int value);
+    void updatePowerMinLabel(int value);
 
 private:
     QWidget *widget;
-    QFormLayout *layout;
+    QVBoxLayout *mainLayout;
     void clearCursorLabels();
     void fftOrZoomChanged(void);
+
+    // Value display labels
+    QLabel *fftSizeValueLabel;
+    QLabel *zoomValueLabel;
+    QLabel *powerMaxValueLabel;
+    QLabel *powerMinValueLabel;
 
 public:
     QPushButton *fileOpenButton;
@@ -76,10 +89,4 @@ public:
     QCheckBox *scalesCheckBox;
     QCheckBox *annosCheckBox;
     QCheckBox *commentsCheckBox;
-
-    // Value display labels
-    QLabel *fftSizeLabel;
-    QLabel *zoomLevelLabel;
-    QLabel *powerMaxLabel;
-    QLabel *powerMinLabel;
 };
