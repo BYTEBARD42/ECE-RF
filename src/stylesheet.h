@@ -25,7 +25,7 @@
 
 namespace Theme {
     // Base palette
-    static const QColor bgDark(0x0a, 0x0a, 0x14);       // #0a0a14 — deepest background
+    static const QColor bgDark(0x16, 0x16, 0x24);       // #161624 — deepest background (softened)
     static const QColor bgBase(0x1e, 0x1e, 0x2e);       // #1e1e2e — main background
     static const QColor bgSurface(0x2a, 0x2a, 0x3a);    // #2a2a3a — panels / dock
     static const QColor bgElevated(0x33, 0x33, 0x48);    // #333348 — hover / elevated

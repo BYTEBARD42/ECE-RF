@@ -499,10 +499,10 @@ void PlotView::paintEvent(QPaintEvent *event)
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
-    // Gradient background: deep dark with subtle depth
+    // Gradient background: gentle dark with subtle depth
     QLinearGradient bgGradient(0, 0, 0, height());
     bgGradient.setColorAt(0, Theme::bgDark);
-    bgGradient.setColorAt(1, QColor(0x12, 0x12, 0x1e));
+    bgGradient.setColorAt(1, QColor(0x1c, 0x1c, 0x2e));
     painter.fillRect(rect, bgGradient);
 
 
