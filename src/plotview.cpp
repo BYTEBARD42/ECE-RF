@@ -27,7 +27,6 @@
 #include <QFileDialog>
 #include <QGridLayout>
 #include <QGroupBox>
-#include <QLinearGradient>
 #include <QMenu>
 #include <QPainter>
 #include <QProgressDialog>
@@ -37,7 +36,6 @@
 #include <QToolTip>
 #include <QVBoxLayout>
 #include "plots.h"
-#include "stylesheet.h"
 
 PlotView::PlotView(InputSource *input) : cursors(this), viewRange({0, 0})
 {
@@ -496,14 +494,7 @@ void PlotView::paintEvent(QPaintEvent *event)
 
     QRect rect = QRect(0, 0, width(), height());
     QPainter painter(viewport());
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::TextAntialiasing, true);
-
-    // Gradient background: gentle dark with subtle depth
-    QLinearGradient bgGradient(0, 0, 0, height());
-    bgGradient.setColorAt(0, Theme::bgDark);
-    bgGradient.setColorAt(1, QColor(0x1c, 0x1c, 0x2e));
-    painter.fillRect(rect, bgGradient);
+    painter.fillRect(rect, Qt::black);
 
 
 #define PLOT_LAYER(paintFunc)                                                   \
@@ -540,17 +531,9 @@ void PlotView::paintTimeScale(QPainter &painter, QRect &rect, range_t<size_t> sa
         return;
 
     painter.save();
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setRenderHint(QPainter::TextAntialiasing, true);
 
-    // Semi-transparent background strip for readability
-    painter.fillRect(QRect(0, 0, rect.width(), 32), QColor(10, 10, 20, 180));
-
-    QPen pen(Theme::accent, 1, Qt::SolidLine);
+    QPen pen(Qt::white, 1, Qt::SolidLine);
     painter.setPen(pen);
-    QFont scaleFont = painter.font();
-    scaleFont.setPointSize(scaleFont.pointSize() - 1);
-    painter.setFont(scaleFont);
     QFontMetrics fm(painter.font());
 
     int tickWidth = 80;
@@ -569,17 +552,13 @@ void PlotView::paintTimeScale(QPainter &painter, QRect &rect, range_t<size_t> sa
 
         char buf[128];
         snprintf(buf, sizeof(buf), "%.06f", tick);
-        painter.setPen(pen);
         painter.drawLine(tickLine, 0, tickLine, 30);
-        painter.setPen(Theme::textPrimary);
         painter.drawText(tickLine + 2, 25, buf);
 
         tick += durationPerTick;
     }
 
     // Draw small ticks
-    QPen smallTickPen(Theme::accentDim, 1, Qt::SolidLine);
-    painter.setPen(smallTickPen);
     durationPerTick /= 10;
     firstTick = int(startTime / durationPerTick) * durationPerTick;
     tick = firstTick;
