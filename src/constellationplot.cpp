@@ -12,6 +12,8 @@
 
 #include "constellationplot.h"
 #include <cmath>
+#include <algorithm>
+#include <vector>
 
 ConstellationPlot::ConstellationPlot(std::shared_ptr<AbstractSampleSource> source)
     : Plot(source)
@@ -63,7 +65,10 @@ void ConstellationPlot::paintMid(QPainter &painter, QRect &rect, range_t<size_t>
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     drawGrid(painter, plotArea);
-    drawConstellation(painter, plotArea, samples.get(), count);
+
+    // drawConstellation now returns the reference amplitude it used for scaling
+    // so we can display a meaningful value in the info line
+    float refAmp = drawConstellation(painter, plotArea, samples.get(), count);
 
     // Draw title
     painter.setPen(QColor(86, 212, 200));
@@ -81,6 +86,17 @@ void ConstellationPlot::paintMid(QPainter &painter, QRect &rect, range_t<size_t>
     painter.setPen(QColor(166, 173, 200));
     painter.drawText(plotArea.right() - 30, plotArea.center().y() + plotSize / 2 + 14, "I →");
     painter.drawText(plotArea.center().x() - plotSize / 2 - 4, plotArea.top() - 2, "Q ↑");
+
+    // Info line: show the 95th-percentile reference amplitude rather than the raw
+    // peak so the user knows the scale is noise-robust
+    painter.setPen(QColor(166, 173, 200, 180));
+    QFont infoFont = painter.font();
+    infoFont.setPointSize(7);
+    painter.setFont(infoFont);
+    QString info = QString("Samples: %1 | Ref amp (p95): %2")
+                       .arg(count)
+                       .arg(QString::number(refAmp, 'f', 3));
+    painter.drawText(plotArea.left(), plotArea.bottom() + 14, info);
 
     painter.restore();
 }
@@ -135,62 +151,141 @@ void ConstellationPlot::drawGrid(QPainter &painter, const QRect &plotArea)
     painter.drawEllipse(QPoint(cx, cy), radius / 2, radius / 2);
 }
 
-void ConstellationPlot::drawConstellation(QPainter &painter, const QRect &plotArea,
-                                           std::complex<float> *samples, size_t count)
+// ---------------------------------------------------------------------------
+//  drawConstellation — noise-robust implementation
+//
+//  Two key changes vs. the original:
+//
+//  1. PERCENTILE-BASED SCALING
+//     The original used the absolute peak amplitude as the scale reference.
+//     A single noise spike (or an occasional transient) would push maxAmp up,
+//     compressing the real constellation into a tiny region in the centre.
+//     We now sort the per-sample amplitudes and use the 95th percentile as the
+//     reference.  The top 5 % of outliers are simply clipped to the plot edge
+//     rather than forcing the entire scale to accommodate them.
+//
+//  2. 2-D DENSITY HEATMAP
+//     Instead of drawing every sample as a dot with equal visual weight, we
+//     accumulate hits into a fixed-resolution grid and render each cell with
+//     brightness proportional to log(density).  Because noise is spread
+//     uniformly it produces a faint, even haze across the grid.  Signal
+//     energy concentrates at the constellation points and produces clearly
+//     distinct bright clusters — the log scale compresses the wide dynamic
+//     range and prevents noisy backgrounds from washing out the signal.
+//
+//  Return value: the p95 reference amplitude used for scaling (displayed by
+//  paintMid in the info line — no other caller needs to change).
+// ---------------------------------------------------------------------------
+float ConstellationPlot::drawConstellation(QPainter &painter, const QRect &plotArea,
+                                            std::complex<float> *samples, size_t count)
 {
-    if (count == 0) return;
+    if (count == 0) return 0.0f;
+
+    // -----------------------------------------------------------------------
+    // 1. Compute per-sample amplitudes and derive a robust scale reference
+    //    using the 95th percentile.  This makes the plot immune to the ~5 %
+    //    worst noise / transient spikes that would otherwise dominate the
+    //    scale when using a raw maximum.
+    // -----------------------------------------------------------------------
+    std::vector<float> amps(count);
+    for (size_t i = 0; i < count; i++)
+        amps[i] = std::abs(samples[i]);
+
+    // Work on a copy so the original order is preserved for the render pass
+    std::vector<float> sorted = amps;
+    std::sort(sorted.begin(), sorted.end());
+
+    // 95th percentile index (clamp to valid range)
+    size_t p95idx = static_cast<size_t>(0.95f * static_cast<float>(count - 1));
+    p95idx = std::min(p95idx, count - 1);
+    float refAmp = sorted[p95idx];
+
+    // Safety guard: if p95 is essentially zero the signal is absent
+    if (refAmp < 1e-10f) {
+        refAmp = sorted.back();          // try absolute max as last resort
+        if (refAmp < 1e-10f) return 0.0f;
+    }
+
+    // Map [-refAmp, +refAmp] → plot area, leaving a 5 % margin.
+    // Samples beyond refAmp are clamped to the edge (not discarded) so that
+    // outliers remain visible as edge artefacts rather than silently vanishing.
+    int halfW  = plotArea.width()  / 2;
+    int halfH  = plotArea.height() / 2;
+    float scale = 0.95f * static_cast<float>(std::min(halfW, halfH)) / refAmp;
+
+    // -----------------------------------------------------------------------
+    // 2. Accumulate hits into a 2-D density grid.
+    //    Resolution of GRID×GRID cells; 128 gives a good balance between
+    //    spatial detail and memory / fill cost.
+    // -----------------------------------------------------------------------
+    static constexpr int GRID = 128;
+    std::vector<int> density(GRID * GRID, 0);
+    int maxDensity = 0;
 
     int cx = plotArea.center().x();
     int cy = plotArea.center().y();
-    int halfW = plotArea.width() / 2;
-    int halfH = plotArea.height() / 2;
 
-    // Find the maximum amplitude for scaling
-    float maxAmp = 0.0f;
     for (size_t i = 0; i < count; i++) {
-        float amp = std::abs(samples[i]);
-        if (amp > maxAmp) maxAmp = amp;
+        float I =  samples[i].real();
+        float Q = -samples[i].imag();   // flip Y: screen y increases downwards
+
+        // Scale to [-1, +1] normalised coordinates, then to grid indices.
+        // std::clamp keeps outliers inside the grid border cell.
+        float nx = (I * scale) / static_cast<float>(halfW);  // [-1..1] approx
+        float ny = (Q * scale) / static_cast<float>(halfH);
+
+        int gx = static_cast<int>((nx + 1.0f) * 0.5f * (GRID - 1) + 0.5f);
+        int gy = static_cast<int>((ny + 1.0f) * 0.5f * (GRID - 1) + 0.5f);
+
+        gx = std::max(0, std::min(GRID - 1, gx));
+        gy = std::max(0, std::min(GRID - 1, gy));
+
+        int &cell = density[gy * GRID + gx];
+        ++cell;
+        if (cell > maxDensity) maxDensity = cell;
     }
 
-    if (maxAmp < 1e-10f) return; // All zeros, nothing to plot
+    if (maxDensity == 0) return refAmp;
 
-    // Scale factor: map [-maxAmp, maxAmp] to [-halfW, halfW]
-    // Use 90% of the area to leave a small margin
-    float scale = 0.9f * std::min(halfW, halfH) / maxAmp;
+    // -----------------------------------------------------------------------
+    // 3. Render the density grid as a heatmap.
+    //    Brightness is mapped through a logarithmic curve so that:
+    //      • a cell hit by even 1 sample is faintly visible (noise floor)
+    //      • a cell hit by many samples saturates to bright teal/white
+    //    This gives a perceptually clear separation between the noise haze
+    //    (dim, uniform) and the constellation clusters (bright, localised).
+    //
+    //    Colour ramp:  dim blue-grey (sparse) → teal → near-white (dense)
+    // -----------------------------------------------------------------------
+    const float logMax = std::log1p(static_cast<float>(maxDensity));
+    const float cellW  = static_cast<float>(plotArea.width())  / GRID;
+    const float cellH  = static_cast<float>(plotArea.height()) / GRID;
 
-    // Draw each sample point as a small dot
-    // Use a semi-transparent color for density visualization
-    for (size_t i = 0; i < count; i++) {
-        float I = samples[i].real();
-        float Q = samples[i].imag();
+    painter.setPen(Qt::NoPen);
 
-        int px = cx + (int)(I * scale);
-        int py = cy - (int)(Q * scale);  // Flip Y because screen coordinates are inverted
+    for (int gy = 0; gy < GRID; gy++) {
+        for (int gx = 0; gx < GRID; gx++) {
+            int d = density[gy * GRID + gx];
+            if (d == 0) continue;
 
-        // Clip to plot area
-        if (px < plotArea.left() || px > plotArea.right() ||
-            py < plotArea.top() || py > plotArea.bottom())
-            continue;
+            // Logarithmic normalisation: t ∈ (0, 1]
+            float t = std::log1p(static_cast<float>(d)) / logMax;
 
-        // Color based on amplitude (brighter = higher amplitude)
-        float amp = std::abs(samples[i]) / maxAmp;
-        int alpha = 80 + (int)(175 * amp);
-        int green = 180 + (int)(75 * amp);
-        int blue = 200 + (int)(55 * amp);
+            // Colour: lerp from dim blue (0,40,80) → bright teal-white
+            //   r: 0   → 180   g: 160 → 230   b: 200 → 255
+            int r = static_cast<int>(180.0f * t);
+            int g = static_cast<int>(160.0f + 70.0f * t);
+            int b = static_cast<int>(200.0f + 55.0f * t);
+            int a = static_cast<int>(30.0f  + 225.0f * t);   // faint for 1 hit, opaque for many
 
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(QColor(86, green, blue, alpha));
-        painter.drawEllipse(QPoint(px, py), 2, 2);
+            int px = plotArea.left() + static_cast<int>(gx * cellW);
+            int py = plotArea.top()  + static_cast<int>(gy * cellH);
+            int pw = std::max(1, static_cast<int>(cellW) + 1);
+            int ph = std::max(1, static_cast<int>(cellH) + 1);
+
+            painter.fillRect(px, py, pw, ph, QColor(r, g, b, a));
+        }
     }
 
-    // Draw sample count info
-    QFont infoFont = painter.font();
-    infoFont.setPointSize(7);
-    painter.setFont(infoFont);
-    painter.setPen(QColor(166, 173, 200, 180));
-    painter.setBrush(Qt::NoBrush);
-    QString info = QString("Samples: %1 | Max amp: %2")
-                       .arg(count)
-                       .arg(QString::number(maxAmp, 'f', 3));
-    painter.drawText(plotArea.left(), plotArea.bottom() + 14, info);
+    return refAmp;
 }
